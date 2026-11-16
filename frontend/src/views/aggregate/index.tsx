@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { request } from '@/api/client'
 
 const ENDPOINT = '/api/aggregate'
+const TRACE_ENDPOINT = '/api/qualityscore/trace/gap'
 const columns = [
   "规则编号",
   "源数据粒度",
@@ -11,7 +12,10 @@ const columns = [
   "数据偏移分钟",
   "补全策略",
   "空值处理",
-  "输出数据集"
+  "输出数据集",
+  "最近评分快照",
+  "最近质量总分",
+  "最近评分周期"
 ]
 const actions = [
   "提交规则评审",
@@ -40,12 +44,15 @@ const stats = [
 ]
 
 type Row = Record<string, string | number | null>
+type TraceNode = { node: string; present: boolean; detail: string }
+type TracePayload = { ok: boolean; reason: string; first_gap: string | null; chain: TraceNode[] }
 
 export default function AggregateView() {
   const [rows, setRows] = useState<Row[]>([])
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [trace, setTrace] = useState<TracePayload | null>(null)
   const filterFields = useMemo(() => columns.slice(0, 3), [])
 
   const reload = useCallback(async () => {
@@ -84,12 +91,24 @@ export default function AggregateView() {
     }
   }
 
+  async function traceGap(row: Row) {
+    setErrorMessage('')
+    try {
+      const dataset = encodeURIComponent(String(row['输出数据集'] ?? ''))
+      const response = await request(`${TRACE_ENDPOINT}?dataset=${dataset}`)
+      if (!response.ok) throw new Error('调用链追溯失败')
+      setTrace(await response.json())
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '调用链追溯失败')
+    }
+  }
+
   return (
     <section className="page" data-module="aggregate">
       <header className="page-head">
         <div>
           <h2>聚合配置管理</h2>
-          <p className="page-desc">管理数据聚合计算规则，定义从明细到汇总的聚合路径和补全策略。</p>
+          <p className="page-desc">管理数据聚合计算规则；评分快照生成后，输出数据集的评分快照、总分与周期会同步回写到这里。</p>
         </div>
         <div className="page-actions">
           <button className="btn primary" type="button" onClick={() => setErrorMessage('聚合规则登记入口尚未接入审批流')}>
@@ -125,6 +144,20 @@ export default function AggregateView() {
         <button className="btn ghost" type="button" onClick={() => setFilters({})}>重置条件</button>
       </form>
 
+      {trace && (
+        <div className="trace-panel">
+          <strong>{trace.reason}</strong>
+          <ol className="trace-chain">
+            {trace.chain.map((node) => (
+              <li key={node.node} className={node.present ? 'trace-ok' : 'trace-gap'}>
+                {node.present ? '✓' : '✗'} {node.node}：{node.detail}
+              </li>
+            ))}
+          </ol>
+          <div className="page-actions"><button className="btn" type="button" onClick={() => setTrace(null)}>关闭追溯</button></div>
+        </div>
+      )}
+
       <table className="data-table">
         <thead>
           <tr>
@@ -142,6 +175,7 @@ export default function AggregateView() {
                     {action}
                   </button>
                 ))}
+                <button className="link" type="button" onClick={() => void traceGap(row)}>质量链路追溯</button>
               </td>
             </tr>
           ))}
